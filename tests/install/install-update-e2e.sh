@@ -258,9 +258,28 @@ TARGET="$(sandbox_target)"
 ok "installed ${BASE:0:12}; update target is ${TARGET:0:12}"
 require_hermes_works 'after install'
 
+# Keep real user data through both update routes, including a Python migration.
+in_sandbox "mkdir -p \$HOME/.hermes/memories; printf '%s\\n' 'E2E existing user memory' > \$HOME/.hermes/memories/MEMORY.md"
+
 # ── apply exactly one update route ─────────────────────────────────────────
 case "$ROUTE" in
   update)
+    # Historical updaters cannot migrate across the current Python floor.
+    # Exercise the supported installer migration for those environments, then
+    # verify the current update command. Compatible runtimes still exercise
+    # the original direct old-release -> target `hermes update` path.
+    installed_python="$(in_sandbox "$INSTALL_DIR/venv/bin/python -c 'import platform; print(platform.python_version())'")"
+    migration="$(python3 scripts/sandbox/python_migration.py "$installed_python" pyproject.toml)"
+    if [ "$migration" = true ]; then
+      step "Compatibility migration from Python $installed_python via installer"
+      install_in_sandbox 'Python compatibility migration' '' migrate
+      require_landed_on_target 'Python compatibility migration'
+      require_hermes_works 'after Python compatibility migration'
+      if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+        printf '### Compatibility migration\n\nRelease `%s` used Python `%s`, below the target requirement. Installer migration and the subsequent update command are both verified.\n' \
+          "$INSTALL_REF" "$installed_python" >> "$GITHUB_STEP_SUMMARY"
+      fi
+    fi
     step 'ROUTE: hermes update'
     # `--yes` reaches the update subcommand only in later releases, and argparse
     # rejects the whole invocation when it does not exist. Ask the installed
@@ -286,6 +305,10 @@ case "$ROUTE" in
     require_hermes_works 'after installer re-run'
     ;;
 esac
+
+in_sandbox "grep -Fx 'E2E existing user memory' \$HOME/.hermes/memories/MEMORY.md" \
+  || fail 'existing user memory was lost during the upgrade'
+ok 'existing user memory preserved'
 
 printf '\n\033[1;32m✓ install/update E2E passed (route: %s, from: %s)\033[0m\n' \
   "$ROUTE" "$INSTALL_REF"

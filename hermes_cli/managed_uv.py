@@ -36,7 +36,6 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from hermes_constants import get_hermes_home
-from tools.environments.windows_env import refresh_env_from_registry
 from hermes_cli.sqlite_runtime import SQLiteRuntimeInfo, probe_sqlite_runtime
 
 logger = logging.getLogger(__name__)
@@ -1299,8 +1298,12 @@ def _install_uv_posix(env: dict[str, str]) -> None:
 
 def _install_uv_windows(env: dict[str, str]) -> None:
     """Invoke the PowerShell installer."""
+    # Older updaters import this module before installing new dependencies.
+    # Loading execution backends at module scope imports orjson and evaluates
+    # annotations unsupported by their old runtime, preventing the repair.
+    from tools.environments.windows_env import refresh_env_from_registry, ps_with_utf8
+
     refresh_env_from_registry()
-    from tools.environments.windows_env import ps_with_utf8
     cmd = ps_with_utf8(
         'irm https://astral.sh/uv/install.ps1 | iex'
     )

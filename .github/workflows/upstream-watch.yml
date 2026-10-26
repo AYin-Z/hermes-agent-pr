@@ -17,13 +17,18 @@ permissions:
   contents: read
   issues: write
 
+concurrency:
+  group: upstream-watch
+  cancel-in-progress: false
+
 jobs:
   watch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+          ref: main
 
       - name: Add upstream remote and fetch
         run: |
@@ -52,19 +57,33 @@ jobs:
             echo "Recent upstream commits:"
             echo ""
             echo '```'
-            git log --oneline main..upstream/main | head -30
+            git log -30 --oneline main..upstream/main
             echo '```'
             echo "__EOF__"
           } >> $GITHUB_OUTPUT
 
       - name: Open or update issue
         if: steps.status.outputs.ahead != '0'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          UPSTREAM_AHEAD: ${{ steps.status.outputs.ahead }}
+          UPSTREAM_SUMMARY: ${{ steps.summary.outputs.body }}
         with:
           script: |
-            const ahead = '${{ steps.status.outputs.ahead }}';
-            const body = `${{ steps.summary.outputs.body }}`;
+            const ahead = process.env.UPSTREAM_AHEAD;
+            const body = process.env.UPSTREAM_SUMMARY;
             const title = `Upstream sync: ${ahead} commits behind NousResearch/hermes-agent`;
+
+            // The label may not exist in a newly enabled fork.
+            try {
+              await github.rest.issues.getLabel({ ...context.repo, name: 'upstream-watch' });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              await github.rest.issues.createLabel({
+                ...context.repo, name: 'upstream-watch', color: '0366d6',
+                description: 'Upstream changes waiting for manual review',
+              });
+            }
 
             // Find an open upstream-watch issue and update it; otherwise open a new one.
             const { data: existing } = await github.rest.issues.listForRepo({
@@ -75,8 +94,8 @@ jobs:
               per_page: 5,
             });
 
-            if (existing.length > 0) {
-              const issue = existing[0];
+            const issue = existing.find(item => !item.pull_request);
+            if (issue) {
               await github.rest.issues.update({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
